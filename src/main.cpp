@@ -6,8 +6,10 @@
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h> //https://github.com/tzapu/WiFiManager
 #include <ArduinoJson.h> //https://github.com/bblanchon/ArduinoJson
-#include <PubSubClient.h>
 #include <AceButton.h>
+#include <Ticker.h>
+#include <AsyncMqttClient.h>
+
 using namespace ace_button;
 
 #define BUTTON_PIN D2
@@ -28,8 +30,8 @@ struct WifiSettings
 struct MqttSettings
 {
     char clientId[20] = "Totem1";
-    char hostname[40] = "192.168.0.142";
-    char port[6] = "1883";
+    char hostname[40] = "192.168.0.141";
+    char port[6] = "1884";
     char user[20] = "Totem1";
     char password[20] = "hansmeiser";
     char wm_mqtt_client_id_identifier[15] = "mqtt_client_id";
@@ -46,12 +48,12 @@ bool shouldSaveConfig = false;
 const char *humidity_topic = "/humidity";
 const char *buttonStatus_topic = "/buttonStatus";
 char topicButtonStatus[30];
-char topicButtonStatus[30];
 
 WiFiClient espClient;
 WifiSettings wifiSettings;
-PubSubClient client(espClient);
 MqttSettings mqttSettings;
+AsyncMqttClient mqttClient;
+Ticker mqttReconnectTimer;
 
 void readSettingsFromConfig()
 {
@@ -213,58 +215,6 @@ void saveConfig()
     configFile.close();
 }
 
-void initializeMqttClient()
-{
-    Serial.println("local ip");
-    Serial.println(WiFi.localIP());
-    client.setServer(mqttSettings.hostname, atoi(mqttSettings.port));
-}
-
-bool tryConnectToMqttServer()
-{
-    if (strlen(mqttSettings.user) == 0)
-    {
-        return client.connect(mqttSettings.clientId);
-    }
-    else
-    {
-        return client.connect(mqttSettings.clientId, mqttSettings.user, mqttSettings.password);
-    }
-}
-
-void reconnect()
-{
-    // Loop until we're reconnected
-    while (!client.connected())
-    {
-        Serial.print("Attempting MQTT connection...");
-        // Attempt to connect
-        // If you do not want to use a username and password, change next line to
-
-        if (tryConnectToMqttServer())
-        {
-            Serial.println("connected");
-        }
-        else
-        {
-            Serial.print(mqttSettings.hostname);
-            Serial.print(" failed, rc=");
-            Serial.print(client.state());
-            Serial.println(" try again in 5 seconds");
-            // Wait 5 seconds before retrying
-            delay(5000);
-        }
-    }
-}
-
-void publishMessage()
-{
-    Serial.print("Publish to");
-    Serial.print(topicButtonStatus);
-    Serial.println("OK");
-    client.publish(topicButtonStatus, "OK", true);
-}
-
 void ledBlink()
 {
     digitalWrite(LED_PIN, LOW);
@@ -272,17 +222,6 @@ void ledBlink()
     digitalWrite(LED_PIN, HIGH);
     delay(250);
 }
-
-void handleMqttState()
-{
-    if (!client.connected())
-    {
-        reconnect();
-    }
-    client.loop();
-}
-
-#include <button.h>
 
 void initializeButton()
 {
@@ -319,6 +258,82 @@ void handleEvent(AceButton * /* button */, uint8_t eventType,
     }
 }
 
+void connectToMqtt()
+{
+    Serial.println("Connecting to MQTT...");
+    mqttClient.connect();
+}
+
+void onMqttConnect(bool sessionPresent)
+{
+    Serial.println("Connected to MQTT.");
+    Serial.print("Session present: ");
+    Serial.println(sessionPresent);
+    uint16_t packetIdSub = mqttClient.subscribe("test/lol", 2);
+    Serial.print("Subscribing at QoS 2, packetId: ");
+    Serial.println(packetIdSub);
+    mqttClient.publish("test/lol", 0, true, "test 1");
+    Serial.println("Publishing at QoS 0");
+    uint16_t packetIdPub1 = mqttClient.publish("test/lol", 1, true, "test 2");
+    Serial.print("Publishing at QoS 1, packetId: ");
+    Serial.println(packetIdPub1);
+    uint16_t packetIdPub2 = mqttClient.publish("test/lol", 2, true, "test 3");
+    Serial.print("Publishing at QoS 2, packetId: ");
+    Serial.println(packetIdPub2);
+}
+
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
+{
+    Serial.println("Disconnected from MQTT.");
+
+    if (WiFi.isConnected())
+    {
+        mqttReconnectTimer.once(2, connectToMqtt);
+    }
+}
+
+void onMqttSubscribe(uint16_t packetId, uint8_t qos)
+{
+    Serial.println("Subscribe acknowledged.");
+    Serial.print("  packetId: ");
+    Serial.println(packetId);
+    Serial.print("  qos: ");
+    Serial.println(qos);
+}
+
+void onMqttUnsubscribe(uint16_t packetId)
+{
+    Serial.println("Unsubscribe acknowledged.");
+    Serial.print("  packetId: ");
+    Serial.println(packetId);
+}
+
+void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total)
+{
+    Serial.println("Publish received.");
+    Serial.print("  topic: ");
+    Serial.println(topic);
+    Serial.print("  qos: ");
+    Serial.println(properties.qos);
+    Serial.print("  dup: ");
+    Serial.println(properties.dup);
+    Serial.print("  retain: ");
+    Serial.println(properties.retain);
+    Serial.print("  len: ");
+    Serial.println(len);
+    Serial.print("  index: ");
+    Serial.println(index);
+    Serial.print("  total: ");
+    Serial.println(total);
+}
+
+void onMqttPublish(uint16_t packetId)
+{
+    Serial.println("Publish acknowledged.");
+    Serial.print("  packetId: ");
+    Serial.println(packetId);
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -338,13 +353,25 @@ void setup()
         saveConfig();
     }
 
-    initializeMqttClient();
+    mqttClient.onConnect(onMqttConnect);
+    mqttClient.onDisconnect(onMqttDisconnect);
+    mqttClient.onSubscribe(onMqttSubscribe);
+    mqttClient.onUnsubscribe(onMqttUnsubscribe);
+    mqttClient.onMessage(onMqttMessage);
+    mqttClient.onPublish(onMqttPublish);
+    mqttClient.setServer(mqttSettings.hostname, atoi(mqttSettings.port));
+    if (strlen(mqttSettings.user) != 0)
+    {
+        mqttClient.setCredentials(mqttSettings.user, mqttSettings.password);
+    }
+
+    connectToMqtt();
 }
 
 void loop()
 {
-    handleMqttState();
-    publishMessage();
+
     button.check();
+
     // ledBlink();
 }

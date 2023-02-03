@@ -373,9 +373,9 @@ void initializePixel()
     brushcolor.s = 255; // full color saturation
     brushcolor.v = 130; // about half the full brightness
 
-    pixelbrush.setSpeed(2000);       // set the brush movement speed (4096 means to move one pixel per update)
+    pixelbrush.setSpeed(50);         // set the brush movement speed (4096 means to move one pixel per update)
     pixelbrush.setColor(brushcolor); // set the brush color
-    pixelbrush.setFadeSpeed(200);    // fading speed of pixels (255 max, 200 is fairly fast)
+    pixelbrush.setFadeSpeed(30);     // fading speed of pixels (255 max, 200 is fairly fast)
     pixelbrush.setFadeout(true);     // do brightness fadeout after painting
     pixelbrush.setBounce(true);      // bounce the brush when it reaches the end of the strip
 }

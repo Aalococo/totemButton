@@ -9,11 +9,15 @@
 #include <AceButton.h>
 #include <Ticker.h>
 #include <AsyncMqttClient.h>
+#include <Adafruit_NeoPixel.h>
+#include <NeoPixelPainter.h>
 
 using namespace ace_button;
 
 #define BUTTON_PIN D2
 #define LED_PIN D4
+#define NUMBEROFPIXELS 6
+#define PIXEL_PIN D5
 
 AceButton button(BUTTON_PIN);
 void initializeButton();
@@ -49,11 +53,19 @@ const char *humidity_topic = "/humidity";
 const char *buttonStatus_topic = "/buttonStatus";
 char topicButtonStatus[30];
 
+// Declaration of objects
 WiFiClient espClient;
 WifiSettings wifiSettings;
 MqttSettings mqttSettings;
 AsyncMqttClient mqttClient;
 Ticker mqttReconnectTimer;
+
+Adafruit_NeoPixel neopixels = Adafruit_NeoPixel(NUMBEROFPIXELS, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+
+// create one canvas and one brush with global scope
+NeoPixelPainterCanvas pixelcanvas = NeoPixelPainterCanvas(&neopixels); // create canvas, linked to the neopixels (must be created before the brush)
+NeoPixelPainterBrush pixelbrush = NeoPixelPainterBrush(&pixelcanvas);  // crete brush, linked to the canvas to paint to
+HSV brushcolor;
 
 void readSettingsFromConfig()
 {
@@ -237,7 +249,6 @@ void initializeButton()
 void handleEvent(AceButton * /* button */, uint8_t eventType,
                  uint8_t buttonState)
 {
-
     // Print out a message for all events.
     Serial.print(F("handleEvent(): eventType: "));
     Serial.print(eventType);
@@ -251,9 +262,16 @@ void handleEvent(AceButton * /* button */, uint8_t eventType,
     {
     case AceButton::kEventPressed:
         digitalWrite(LED_PIN, LOW);
+        brushcolor.h = 20;
+        pixelbrush.setColor(brushcolor);
         break;
     case AceButton::kEventReleased:
         digitalWrite(LED_PIN, HIGH);
+        break;
+    case AceButton::kEventLongPressed:
+        digitalWrite(LED_PIN, HIGH);
+        brushcolor.h = 80;
+        pixelbrush.setColor(brushcolor);
         break;
     }
 }
@@ -333,7 +351,34 @@ void onMqttPublish(uint16_t packetId)
     Serial.print("  packetId: ");
     Serial.println(packetId);
 }
+void initializePixel()
+{
+    pinMode(PIXEL_PIN, OUTPUT);
 
+    neopixels.begin();
+
+    if (pixelcanvas.isvalid() == false)
+        Serial.println(F("canvas allocation problem (out of ram, reduce number of pixels)"));
+    else
+        Serial.println(F("canvas allocation ok"));
+
+    if (pixelbrush.isvalid() == false)
+        Serial.println(F("brush allocation problem"));
+    else
+        Serial.println(F("brush allocation ok"));
+
+    // initialize the animation, this is where the magic happens:
+
+    brushcolor.h = 0;   // zero is red in HSV. Library uses 0-255 instead of 0-360 for colors (see https://en.wikipedia.org/wiki/HSL_and_HSV)
+    brushcolor.s = 255; // full color saturation
+    brushcolor.v = 130; // about half the full brightness
+
+    pixelbrush.setSpeed(2000);       // set the brush movement speed (4096 means to move one pixel per update)
+    pixelbrush.setColor(brushcolor); // set the brush color
+    pixelbrush.setFadeSpeed(200);    // fading speed of pixels (255 max, 200 is fairly fast)
+    pixelbrush.setFadeout(true);     // do brightness fadeout after painting
+    pixelbrush.setBounce(true);      // bounce the brush when it reaches the end of the strip
+}
 void setup()
 {
     Serial.begin(115200);
@@ -347,6 +392,7 @@ void setup()
     readSettingsFromConfig();
     initializeWifiManager();
     initializeButton();
+    initializePixel();
 
     if (shouldSaveConfig)
     {
@@ -370,8 +416,12 @@ void setup()
 
 void loop()
 {
-
     button.check();
+    neopixels.clear(); // always need to clear the pixels, the canvas' colors will be added to whatever is on the pixels before calling an canvas update
 
+    pixelbrush.paint();     // paint the brush to the canvas (and update the brush, i.e. move it a little)
+    pixelcanvas.transfer(); // transfer the canvas to the neopixels
+
+    neopixels.show();
     // ledBlink();
 }

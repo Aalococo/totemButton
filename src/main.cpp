@@ -7,8 +7,15 @@
 #include <WiFiManager.h> //https://github.com/tzapu/WiFiManager
 #include <ArduinoJson.h> //https://github.com/bblanchon/ArduinoJson
 #include <PubSubClient.h>
+#include <AceButton.h>
+using namespace ace_button;
 
-#define TRIGGER_PIN D2
+#define BUTTON_PIN D2
+#define LED_PIN D4
+
+AceButton button(BUTTON_PIN);
+void initializeButton();
+void handleEvent(AceButton *, uint8_t, uint8_t);
 
 // set the settins for your Wifi Access Point (AP)
 struct WifiSettings
@@ -21,10 +28,10 @@ struct WifiSettings
 struct MqttSettings
 {
     char clientId[20] = "Totem1";
-    char hostname[40] = "192.168.178.49";
+    char hostname[40] = "192.168.0.142";
     char port[6] = "1883";
-    char user[20];
-    char password[20];
+    char user[20] = "Totem1";
+    char password[20] = "hansmeiser";
     char wm_mqtt_client_id_identifier[15] = "mqtt_client_id";
     char wm_mqtt_hostname_identifier[14] = "mqtt_hostname";
     char wm_mqtt_port_identifier[10] = "mqtt_port";
@@ -36,8 +43,10 @@ struct MqttSettings
 bool shouldSaveConfig = false;
 
 // topic to send the mqtt message to
-const char *humidity_topic = "sensor/humidity";
-char topic[30];
+const char *humidity_topic = "/humidity";
+const char *buttonStatus_topic = "/buttonStatus";
+char topicButtonStatus[30];
+char topicButtonStatus[30];
 
 WiFiClient espClient;
 WifiSettings wifiSettings;
@@ -85,8 +94,9 @@ void readSettingsFromConfig()
                     strcpy(mqttSettings.user, doc[mqttSettings.wm_mqtt_user_identifier]);
                     strcpy(mqttSettings.password, doc[mqttSettings.wm_mqtt_password_identifier]);
 
-                    strcpy(topic, mqttSettings.clientId);
-                    strcat(topic, "/status");
+                    // generate topics
+                    strcpy(topicButtonStatus, mqttSettings.clientId);
+                    strcat(topicButtonStatus, buttonStatus_topic);
                 }
             }
         }
@@ -146,9 +156,9 @@ void initializeWifiManager()
     // useful to make it all retry or go to sleep
     // in seconds
     // wifiManager.setTimeout(120);
-    if (digitalRead(TRIGGER_PIN) == LOW)
+    if (button.isPressedRaw())
     {
-
+        Serial.println(F("setup(): button was pressed while booting. Start config portal "));
         if (!wifiManager.startConfigPortal(wifiSettings.apName, wifiSettings.apPassword))
         {
             Serial.println("failed to connect and hit timeout");
@@ -173,7 +183,8 @@ void initializeWifiManager()
     }
 
     // if you get here you have connected to the WiFi
-    Serial.println("connected...yeey :)");
+    Serial.println("connected to:)");
+    Serial.println(WiFi.SSID());
 
     // read updated parameters
     strcpy(mqttSettings.clientId, custom_mqtt_client_id.getValue());
@@ -229,6 +240,7 @@ void reconnect()
         Serial.print("Attempting MQTT connection...");
         // Attempt to connect
         // If you do not want to use a username and password, change next line to
+
         if (tryConnectToMqttServer())
         {
             Serial.println("connected");
@@ -248,16 +260,16 @@ void reconnect()
 void publishMessage()
 {
     Serial.print("Publish to");
-    Serial.print(topic);
+    Serial.print(topicButtonStatus);
     Serial.println("OK");
-    client.publish(topic, "OK", true);
+    client.publish(topicButtonStatus, "OK", true);
 }
 
 void ledBlink()
 {
-    digitalWrite(2, LOW);
+    digitalWrite(LED_PIN, LOW);
     delay(250);
-    digitalWrite(2, HIGH);
+    digitalWrite(LED_PIN, HIGH);
     delay(250);
 }
 
@@ -270,15 +282,56 @@ void handleMqttState()
     client.loop();
 }
 
+#include <button.h>
+
+void initializeButton()
+{
+    ButtonConfig *buttonConfig = button.getButtonConfig();
+    buttonConfig->setEventHandler(handleEvent);
+    buttonConfig->setFeature(ButtonConfig::kFeatureClick);
+    buttonConfig->setFeature(ButtonConfig::kFeatureDoubleClick);
+    buttonConfig->setFeature(ButtonConfig::kFeatureLongPress);
+    buttonConfig->setFeature(ButtonConfig::kFeatureRepeatPress);
+}
+
+// The event handler for the button.
+void handleEvent(AceButton * /* button */, uint8_t eventType,
+                 uint8_t buttonState)
+{
+
+    // Print out a message for all events.
+    Serial.print(F("handleEvent(): eventType: "));
+    Serial.print(eventType);
+    Serial.print(F("; buttonState: "));
+    Serial.println(buttonState);
+
+    // Control the LED only for the Pressed and Released events.
+    // Notice that if the MCU is rebooted while the button is pressed down, no
+    // event is triggered and the LED remains off.
+    switch (eventType)
+    {
+    case AceButton::kEventPressed:
+        digitalWrite(LED_PIN, LOW);
+        break;
+    case AceButton::kEventReleased:
+        digitalWrite(LED_PIN, HIGH);
+        break;
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
     Serial.println();
-    pinMode(TRIGGER_PIN, INPUT_PULLUP);
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
     pinMode(2, OUTPUT);
+
+    // Button uses the built-in pull up register.
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     readSettingsFromConfig();
     initializeWifiManager();
+    initializeButton();
 
     if (shouldSaveConfig)
     {
@@ -292,5 +345,6 @@ void loop()
 {
     handleMqttState();
     publishMessage();
-    ledBlink();
+    button.check();
+    // ledBlink();
 }
